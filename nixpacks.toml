@@ -1,2 +1,22 @@
 [phases.setup]
-nixPkgs = ["php82", "php82Extensions.mysqli", "php82Extensions.pdo", "php82Extensions.pdo_mysql", "php82Extensions.mbstring", "php82Extensions.openssl", "php82Extensions.tokenizer", "php82Extensions.xml", "php82Extensions.ctype", "php82Extensions.curl", "php82Extensions.fileinfo", "php82Extensions.json", "php82Extensions.bcmath", "php82Extensions.gd", "php82Extensions.zip"]
+nixPkgs = [
+  "php83",
+  "php83Extensions.mysqli",
+  "php83Extensions.pdo",
+  "php83Extensions.pdo_mysql",
+  "php83Extensions.mbstring",
+  "php83Extensions.openssl",
+  "php83Extensions.tokenizer",
+  "php83Extensions.xml",
+  "php83Extensions.ctype",
+  "php83Extensions.curl",
+  "php83Extensions.fileinfo",
+  "php83Extensions.json",
+  "php83Extensions.bcmath",
+  "php83Extensions.gd",
+  "php83Extensions.zip",
+  "php83Extensions.session",
+  "php83Extensions.iconv",
+  "php83Extensions.simplexml",
+  "php83Extensions.dom"
+]
