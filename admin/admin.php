@@ -180,6 +180,125 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // =============================================
+// EXPORT EXCEL FOR A SPECIFIC DATE
+// =============================================
+if (isset($_GET['export_excel']) && isset($_GET['date'])) {
+    $exportDate = $_GET['date'];
+    
+    // Validate date format
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $exportDate)) {
+        die("Invalid date format");
+    }
+    
+    // Get orders for that date
+    $exportQuery = "SELECT o.orderId, o.queue_number, u.username, u.phoneNumber,
+                    o.orderType, o.pickupTime, o.points_used, o.totalAmount, o.status,
+                    o.createdAt, o.specialRequest, o.rejectionReason,
+                    (SELECT GROUP_CONCAT(CONCAT(m.itemName, ' (', oi.quantity, ')') SEPARATOR ' | ') 
+                     FROM order_items oi JOIN menu_items m ON oi.itemId = m.itemId 
+                     WHERE oi.orderId = o.orderId) as items
+                    FROM orders o
+                    LEFT JOIN users u ON o.userId = u.userId
+                    WHERE DATE(o.createdAt) = ?
+                    ORDER BY o.orderId ASC";
+    
+    $expStmt = $conn->prepare($exportQuery);
+    $expStmt->bind_param("s", $exportDate);
+    $expStmt->execute();
+    $expResult = $expStmt->get_result();
+    
+    // Set headers for Excel download
+    $filename = "ucsh_orders_" . $exportDate . ".xls";
+    header('Content-Type: application/vnd.ms-excel; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+    
+    // Output as HTML table (Excel will open it)
+    echo "\xEF\xBB\xBF"; // UTF-8 BOM for Myanmar text
+    echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">';
+    echo '<head><meta charset="UTF-8">';
+    echo '<style>
+        table { border-collapse: collapse; }
+        th { background: #1EAFBD; color: white; padding: 8px; border: 1px solid #ccc; font-weight: bold; }
+        td { padding: 6px; border: 1px solid #ccc; }
+        .header { font-size: 16px; font-weight: bold; background: #EBF8F9; }
+    </style>';
+    echo '</head><body>';
+    
+    echo '<h2 style="color: #1EAFBD;">UCSH Canteen - Sales Report</h2>';
+    echo '<p><strong>Date:</strong> ' . htmlspecialchars($exportDate) . '</p>';
+    
+    // Summary
+    $summaryStmt = $conn->prepare("
+        SELECT 
+            COUNT(*) as totalOrders,
+            COALESCE(SUM(points_used), 0) as totalPoints,
+            COALESCE(SUM(CASE WHEN status NOT IN ('rejected') THEN points_used ELSE 0 END), 0) as validPoints,
+            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completedOrders,
+            COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) as rejectedOrders
+        FROM orders 
+        WHERE DATE(createdAt) = ?
+    ");
+    $summaryStmt->bind_param("s", $exportDate);
+    $summaryStmt->execute();
+    $summary = $summaryStmt->get_result()->fetch_assoc();
+    $summaryStmt->close();
+    
+    echo '<table style="margin-bottom: 20px;">';
+    echo '<tr><td class="header">Total Orders</td><td>' . $summary['totalOrders'] . '</td></tr>';
+    echo '<tr><td class="header">Completed Orders</td><td>' . $summary['completedOrders'] . '</td></tr>';
+    echo '<tr><td class="header">Rejected Orders</td><td>' . $summary['rejectedOrders'] . '</td></tr>';
+    echo '<tr><td class="header">Total Points Used</td><td>' . number_format($summary['totalPoints']) . '</td></tr>';
+    echo '<tr><td class="header">Valid Points (non-rejected)</td><td>' . number_format($summary['validPoints']) . '</td></tr>';
+    echo '</table>';
+    
+    // Orders table
+    echo '<table>';
+    echo '<thead><tr>';
+    echo '<th>#</th>';
+    echo '<th>Queue</th>';
+    echo '<th>Customer</th>';
+    echo '<th>Phone</th>';
+    echo '<th>Items</th>';
+    echo '<th>Type</th>';
+    echo '<th>Pickup Time</th>';
+    echo '<th>Points</th>';
+    echo '<th>Status</th>';
+    echo '<th>Created At</th>';
+    echo '<th>Special Request</th>';
+    echo '<th>Rejection Reason</th>';
+    echo '</tr></thead><tbody>';
+    
+    $rowNum = 1;
+    if ($expResult && $expResult->num_rows > 0) {
+        while ($ord = $expResult->fetch_assoc()) {
+            echo '<tr>';
+            echo '<td>' . $rowNum++ . '</td>';
+            echo '<td>' . htmlspecialchars($ord['queue_number'] ?? 'Q-' . str_pad($ord['orderId'], 3, '0', STR_PAD_LEFT)) . '</td>';
+            echo '<td>' . htmlspecialchars($ord['username'] ?? 'Guest') . '</td>';
+            echo '<td>' . htmlspecialchars($ord['phoneNumber'] ?? '-') . '</td>';
+            echo '<td>' . htmlspecialchars($ord['items'] ?? 'No items') . '</td>';
+            echo '<td>' . strtoupper($ord['orderType']) . '</td>';
+            echo '<td>' . htmlspecialchars($ord['pickupTime']) . '</td>';
+            echo '<td>' . number_format($ord['points_used']) . '</td>';
+            echo '<td>' . strtoupper($ord['status']) . '</td>';
+            echo '<td>' . date('d/m/Y h:i A', strtotime($ord['createdAt'])) . '</td>';
+            echo '<td>' . htmlspecialchars($ord['specialRequest'] ?? '') . '</td>';
+            echo '<td>' . htmlspecialchars($ord['rejectionReason'] ?? '') . '</td>';
+            echo '</tr>';
+        }
+    } else {
+        echo '<tr><td colspan="12" style="text-align:center;">No orders found for this date</td></tr>';
+    }
+    
+    echo '</tbody></table>';
+    echo '</body></html>';
+    $expStmt->close();
+    exit();
+}
+
+// =============================================
 // STATISTICS
 // =============================================
 $totalPoints = $conn->query("SELECT SUM(points) as totalPoints FROM users")->fetch_assoc()['totalPoints'] ?? 0;
@@ -237,7 +356,9 @@ while ($row = $catStmt->fetch_assoc()) {
     $catCounts[] = (int)$row['total'];
 }
 
-// FETCH ORDERS
+// =============================================
+// FETCH ORDERS - Last 5 days (no limit)
+// =============================================
 $orders_query = "SELECT o.*, u.username, 
                 (SELECT GROUP_CONCAT(CONCAT(m.itemId, ':', m.itemName, ' (', oi.quantity, ')') SEPARATOR '|') 
                  FROM order_items oi JOIN menu_items m ON oi.itemId = m.itemId WHERE oi.orderId = o.orderId) as items_with_id,
@@ -245,7 +366,8 @@ $orders_query = "SELECT o.*, u.username,
                  FROM order_items oi JOIN menu_items m ON oi.itemId = m.itemId WHERE oi.orderId = o.orderId) as items 
                 FROM orders o 
                 LEFT JOIN users u ON o.userId = u.userId 
-                ORDER BY o.orderId DESC LIMIT 20";
+                WHERE o.createdAt >= DATE_SUB(NOW(), INTERVAL 5 DAY)
+                ORDER BY o.orderId DESC";
 $orders_result = $conn->query($orders_query);
 
 // AJAX MODE
@@ -494,10 +616,32 @@ if ($isAjax) {
             </div>
         </div>
 
+        <!-- ✅ EXCEL DOWNLOAD SECTION -->
+        <div class="stat-card mb-4">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <h6 class="fw-bold mb-1"><i class="fa-solid fa-file-excel text-success me-2"></i>Download Daily Sales Report</h6>
+                    <small class="text-muted">ရောင်းအားကို ရက်ရွေးပြီး Excel ဖိုင်အနေနဲ့ ဒေါင်းလို့ရပါတယ်</small>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                    <input type="date" id="exportDate" class="form-control form-control-sm" style="max-width: 180px;" value="<?= date('Y-m-d') ?>">
+                    <button onclick="downloadExcel()" class="btn btn-success btn-sm rounded-3 fw-medium px-3">
+                        <i class="fa-solid fa-download me-1"></i>Download Excel
+                    </button>
+                    <button onclick="downloadTodayExcel()" class="btn btn-outline-success btn-sm rounded-3 fw-medium px-3">
+                        <i class="fa-solid fa-calendar-day me-1"></i>Today
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Orders Table -->
         <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
             <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
-                <h6 class="fw-bold m-0 text-dark"><i class="fa-solid fa-list-check text-brand me-2"></i>Recent Orders</h6>
+                <h6 class="fw-bold m-0 text-dark">
+                    <i class="fa-solid fa-list-check text-brand me-2"></i>Recent Orders
+                    <small class="text-muted fw-normal ms-2">(နောက်ဆုံး ၅ ရက်စာ)</small>
+                </h6>
                 <span class="badge bg-success-subtle text-success"><i class="fa-solid fa-circle" style="font-size: 6px;"></i> Live</span>
             </div>
             <div class="table-responsive">
@@ -693,7 +837,7 @@ if ($isAjax) {
     </div>
 </div>
 
-<!-- Reject Modal (⚠️ တစ်ခုပဲ ရှိရမည်) -->
+<!-- Reject Modal -->
 <div class="modal fade" id="rejectModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content rounded-4 border-0 shadow">
@@ -722,6 +866,26 @@ if ($isAjax) {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+// ✅ EXCEL DOWNLOAD
+function downloadExcel() {
+    const dateInput = document.getElementById('exportDate').value;
+    if (!dateInput) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'ရက် ရွေးပါ',
+            confirmButtonColor: '#1EAFBD'
+        });
+        return;
+    }
+    window.location.href = 'admin.php?export_excel=1&date=' + encodeURIComponent(dateInput);
+}
+
+function downloadTodayExcel() {
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('exportDate').value = today;
+    window.location.href = 'admin.php?export_excel=1&date=' + today;
+}
+
 // CHARTS
 new Chart(document.getElementById('salesChart'), {
     type: 'line',
@@ -1122,7 +1286,6 @@ function showRejectModal(orderId, itemsWithId) {
     document.getElementById('rejectReasonInput').value = '';
     
     if (!itemsWithId || itemsWithId === 'null' || itemsWithId === '') {
-        // Items မရှိရင် Select All ပဲ ပြ
         var allDiv = document.createElement('div');
         allDiv.className = 'form-check mb-2';
         allDiv.innerHTML = `<input class="form-check-input" type="checkbox" id="selectAllItems" checked onchange="toggleAllItems()"><label class="form-check-label fw-bold" for="selectAllItems">အားလုံး ပယ်ချမည်</label>`;
@@ -1168,7 +1331,6 @@ function confirmReject() {
     var selectedItems = [];
     document.querySelectorAll('.item-checkbox:checked').forEach(cb => selectedItems.push(cb.value));
     
-    // Items မရှိရင် 'all' သုံး
     var rejectedItems = 'all';
     if (selectedItems.length > 0) {
         rejectedItems = selectedItems.join(',');
